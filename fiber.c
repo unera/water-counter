@@ -44,7 +44,6 @@ fiber_current(void)
 	return current;
 }
 
-
 void
 fiber_cede(void)
 {
@@ -101,4 +100,14 @@ fiber_wakeup(struct fiber *f)
 {
 	list_del(&f->list);
 	list_add_tail(&f->list, &ready);
+}
+
+void
+fiber_init(void)
+{
+	static struct fiber _main;
+	if (current)
+		return;
+	list_add_tail(&_main.list, &ready);
+	current = &_main;
 }
