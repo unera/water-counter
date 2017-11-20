@@ -80,6 +80,10 @@ setup() {
 SIGNAL(TIMER2_COMPA_vect) {
 	TCNT2 = 0;
 	for (uint8_t i = 0; i < SLOTS; i++) {
+		if (!_delay[i])
+			continue;
+		if (fiber_status(_delay[i]) != 's')
+			continue;
 		fiber_wakeup(_delay[i]);
 		_delay[i] = NULL;
 	}
