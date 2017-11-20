@@ -233,6 +233,14 @@ fiber_done(const void *data, size_t data_len)
 	_fiber_schedule(DEAD, &dead);
 }
 
+void
+fiber_unlink(struct fiber *f)
+{
+	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+		list_del(&f->list);
+	}
+}
+
 /********** private functions ************************************/
 
 static void
