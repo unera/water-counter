@@ -56,18 +56,64 @@ struct fiber * fiber_current(void);
  */
 unsigned char fiber_status(const struct fiber *f);
 
-// switch to the other ready fiber (current fiber is ready)
+/** fiber_cede - switch to the other processing fiber
+ *
+ * return immediately if there is no one other processing fibers
+ */
 void fiber_cede(void);
 
-// cancel processing the fiber
+/** fiber_cancel - cancel processing fiber
+ *
+ * Note: the function can use to cancel current fiber.
+ */
 void fiber_cancel(struct fiber *fiber);
 
-// switch to the other ready fiber (current fiber is sleep)
+/** fiber_schedule - switch to the other ready fiber,
+ * marks current fiber as scheduled.
+ *
+ */
 void fiber_schedule(void);
 
-// wakeup scheduled fiber
+/** fiber_wakeup - wakeup scheduled fiber
+ *
+ * Note: the function can be call inside interrupt handler.
+ */
 void fiber_wakeup(struct fiber *w);
 
+/** fiber_join - wait until fiber function done
+ *
+ * Note: return NULL if:
+ *
+ * - try join itself
+ * - join main fiber
+ *
+ * main fiber can be cancelled, can join, can done by fiber_done,
+ * but it uses default CPU's stack, so there is no place to store
+ * done data.
+ */
+const void * fiber_join(struct fiber *f);
+
+/** fiber_done - done current fiber
+ *
+ * @data - data to copy to output buffer
+ * @data_len - length of @data
+ *
+ * Note: output buffer is placed on fiber's stack.
+ * so stack have to have enough size to contain
+ * the data and struct fiber (~16 bytes).
+ *
+ * Note: main fiber does not copy the data.
+ */
+void fiber_done(const void *data, size_t data_len);
+
+/** fiber_unlink - unlink fiber from internal lists
+ *
+ * @f - fiber
+ *
+ * Each fiber is placed in internal fiber's lists (ready, zombies, etc).
+ * If You joined the fiber, You can use it's stack area after the call.
+ */
+void fiber_unlink(struct fiber *);
 #ifdef __cplusplus
 };	/* extern "C" */
 #endif
