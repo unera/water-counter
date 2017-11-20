@@ -3,64 +3,7 @@
 #include <avr/io.h>
 #include <util/atomic.h>
 #include <string.h>
-
-/* part from linux-kernel list.h adapted for AVR */
-struct list_head { struct list_head *next, *prev; };
-
-#define LIST_HEAD_INIT(name) { &(name), &(name) }
-#define LIST_HEAD(name) \
-	struct list_head name = LIST_HEAD_INIT(name)
-#define INIT_LIST_HEAD(ptr) do { \
-	(ptr)->next = (ptr); (ptr)->prev = (ptr); \
-} while (0)
-
-static inline void
-__list_add(struct list_head *newl,
-			      struct list_head *prev,
-			      struct list_head *next)
-{
-	next->prev = newl;
-	newl->next = next;
-	newl->prev = prev;
-	prev->next = newl;
-}
-
-static inline void
-list_add(struct list_head *newl, struct list_head *head)
-{
-	__list_add(newl, head, head->next);
-}
-
-static inline void
-list_add_tail(struct list_head *newl, struct list_head *head)
-{
-	__list_add(newl, head->prev, head);
-}
-
-#define list_for_each(pos, head) \
-	for (pos = (head)->next; pos != (head); \
-		pos = pos->next)
-
-#define list_entry(ptr, type, member) \
-	((type *)((char *)(ptr)-(uint16_t)(&((type *)0)->member)))
-
-static inline void
-__list_del(struct list_head *prev, struct list_head *next)
-{
-	next->prev = prev;
-	prev->next = next;
-}
-
-static inline void
-list_del(struct list_head *entry)
-{
-	__list_del(entry->prev, entry->next);
-	entry->next = (struct list_head *) 0;
-	entry->prev = (struct list_head *) 0;
-}
-
-/*************************************************/
-
+#include "list.h"
 
 enum fiber_state {
 	READY		= 'r',
@@ -119,7 +62,7 @@ fiber_cede(void)
 		return;
 
 	struct fiber *next;
-	while (!(next = _fiber_fetch(1, &ready)))
+	if (!(next = _fiber_fetch(1, &ready)))
 		return;
 
 	return _fiber_switch(next, &ready);
@@ -134,13 +77,23 @@ fiber_schedule(void)
 void
 fiber_wakeup(struct fiber *f)
 {
+	if (!f)
+		return;
 	if (f->state != SCHEDULED)
 		return;
 
+	if (f == current) {
+		// current fiber is wait in deadlock
+		ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+			current->state = READY;
+		}
+		return;
+	}
+
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-		f->state = READY;
-		list_del(&f->list);
+		list_del_init(&f->list);
 		list_add_tail(&f->list, &ready);
+		f->state = READY;
 	}
 }
 
@@ -150,10 +103,10 @@ fibers_init(void)
 	static struct fiber _main;
 	if (current)			// already init done
 		return;
-	memset(&_main, 0, sizeof(_main));
-	_main.state = READY;
-	INIT_LIST_HEAD(&_main.join);
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+		memset(&_main, 0, sizeof(_main));
+		_main.state = READY;
+		INIT_LIST_HEAD(&_main.join);
 		list_add_tail(&_main.list, &ready);
 		current = &_main;
 	}
@@ -162,6 +115,8 @@ fibers_init(void)
 void
 fiber_cancel(struct fiber *f)
 {
+	if (!f)
+		return;
 	switch(f->state) {
 		case DEAD:
 		case CANCELLED:
@@ -170,26 +125,25 @@ fiber_cancel(struct fiber *f)
 			break;
 		case SCHEDULED:
 		case STARTING:
-			f->state = CANCELLED;
-			ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-				list_del(&f->list);
-			}
-			return;
+			goto DROP;
 	}
-	if (f != current) {
+	if (f == current) {
+		return _fiber_schedule(CANCELLED, &dead);
+	}
+
+	DROP:
 		f->state = CANCELLED;
 		ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-			list_del(&f->list);
+			list_del_init(&f->list);
+			list_add_tail(&f->list, &dead);
 		}
-		return;
-	}
-	// self cancel
-	return _fiber_schedule(CANCELLED, NULL);
 }
 
 unsigned char
 fiber_status(const struct fiber *f)
 {
+	if (!f)
+		return 'U';
 	return f->state;
 }
 
@@ -237,7 +191,7 @@ void
 fiber_unlink(struct fiber *f)
 {
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-		list_del(&f->list);
+		list_del_init(&f->list);
 	}
 }
 
@@ -249,6 +203,7 @@ _fiber_run(void)
 	current->state = READY;
 	for(;;) {
 		current->cb();
+
 		current->state = DEAD;
 
 		// join waiters
@@ -273,11 +228,13 @@ _fiber_switch(struct fiber *next, struct list_head *list)
 	uint8_t real_sreg;
 
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-		list_del(&prev->list);
+		list_del_init(&prev->list);
 		if (list)
 			list_add_tail(&prev->list, list);
 		current = next;
 
+		// hack!: we hope ATOMIC_RESTORESTATE is unchanged
+		// in the future
 		real_sreg	= sreg_save;
 
 		/* switch stack! */
@@ -285,14 +242,14 @@ _fiber_switch(struct fiber *next, struct list_head *list)
 		SP = next->sp;
 
 		if (current->state == STARTING) {
-			// hack!: we hope ATOMIC_RESTORESTATE is unchanged
-			// in the future
 			SREG = real_sreg;
 			// don't return here
 			_fiber_run();
 		}
 	}
 
+	// stack was switched, so SREG could be changed
+	// TODO: review
 	SREG = real_sreg;
 	current->state = READY;
 }
@@ -304,8 +261,17 @@ _fiber_schedule(enum fiber_state new_state, struct list_head *list)
 		return;
 	current->state = new_state;
 	struct fiber *next;
-	while (!(next = _fiber_fetch(1, &ready)));
-	_fiber_switch(next, list);
+
+	// Deadlock: there is no fiber ready
+	// wait until next fiber is present
+	// or current is ready
+	for (;;) {
+		next = _fiber_fetch(1, &ready);
+		if (next)
+			return _fiber_switch(next, list);
+		if (current->state == READY)
+			return;
+	}
 }
 
 static struct fiber *
