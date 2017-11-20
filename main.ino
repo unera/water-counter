@@ -4,24 +4,27 @@
 static void
 led_on(void)
 {
-	for(;;) {
+	while (1){
 		delay(300);
 		digitalWrite(LED_BUILTIN, HIGH);
+		fiber_cede();
 	}
 }
 
 static void
 led_off()
 {
-	for(;;) {
-		delay(500);
+	while(1) {
+		delay(50);
 		digitalWrite(LED_BUILTIN, LOW);
+		fiber_cede();
 	}
 }
 
 void
 setup() {
 	pinMode(LED_BUILTIN, OUTPUT);
+	digitalWrite(LED_BUILTIN, LOW);
 	fibers_init();
 
 	static uint8_t stack1[64];
@@ -32,5 +35,5 @@ setup() {
 
 void
 loop() {
-	fiber_cede();
+	fiber_cancel(fiber_current());
 }
