@@ -5,7 +5,13 @@
 #include <util/atomic.h>
 #include <avr/interrupt.h>
 
-enum fiber_state { READY = 'r', SLEEP = 's', DEAD = 'd', CANCELLED = 'c' };
+enum fiber_state {
+	READY		= 'r',
+	STARTING	= 'R',
+	SLEEP		= 's',
+	DEAD		= 'd',
+	CANCELLED	= 'c'
+};
 typedef uint16_t		code_t;
 struct fiber {
 	enum fiber_state	state;
@@ -22,6 +28,7 @@ static LIST_HEAD(sch);
 static void
 fiber_run(void)
 {
+	current->state = READY;
 	for(;;) {
 		current->cb();
 		current->state = DEAD;
@@ -33,7 +40,7 @@ struct fiber *
 fiber_create(fiber_cb cb, void *stack, size_t stack_size)
 {
 	struct fiber *c = (struct fiber *)stack;
-	c->state = READY;
+	c->state = STARTING;
 	c->cb = cb;
 	c->sp = (code_t)(((char *)stack) + stack_size - 1);
 	list_add_tail(&c->list, &ready);
@@ -51,12 +58,33 @@ fiber_current(void)
 	return current;
 }
 
+
+void
+_fiber_switch(struct fiber *next, struct list_head *list)
+{
+	static struct fiber *prev;
+	prev = current;
+
+	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+		list_del(&prev->list);
+		list_add_tail(&prev->list, list);
+		current = next;
+
+		/* switch stack! */
+		prev->sp = SP;
+		SP = next->sp;
+	}
+
+	if (current->state == STARTING) {
+		fiber_run();
+	}
+	current->state = READY;
+}
+
 void
 fiber_cede(void)
 {
-	static struct fiber *prev, *next;
-
-	// WARNING: DO NOT USE any local variables, only static!
+	static struct fiber *next;
 
 	if (!current)		// not init yet
 		return;
@@ -68,35 +96,17 @@ fiber_cede(void)
 	if (current == next)
 		return;
 
-	prev = current;
-
-	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-		list_del(&prev->list);
-		list_add_tail(&prev->list, &ready);
-		current = next;
-
-		/* switch stack! */
-		prev->sp = SP + 2; // drop saved SREG
-		SP = next->sp;
-		// hack! We hope that macroses
-		//  - ATOMIC_RESTORESTATE
-		//  - ATOMIC_BLOCK
-		// will not be changed in the future
-		asm("push r10");
-		asm("mov r10, sreg_save");		// hack!
-/*                 asm("push sreg_save"); */
-	}
-
-
+	_fiber_switch(next, &ready);
 }
 
 void
 fiber_schedule(void)
 {
-	static struct fiber *prev, *next;
+	static struct fiber *next;
 
 	if (!current)
 		return;
+	current->state = SLEEP;
 	for (;;) { // current fiber is last
 		ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
 			next = list_entry(&ready.next, struct fiber, list);
@@ -105,16 +115,7 @@ fiber_schedule(void)
 			break;
 	}
 
-	prev = current;
-
-	list_del(&prev->list);
-	list_add_tail(&prev->list, &sch);
-	current = next;
-
-
-	/* switch stack! */
-	prev->sp = SP;
-	SP = next->sp;
+	_fiber_switch(next, &sch);
 }
 
 void
@@ -152,6 +153,7 @@ fiber_cancel(struct fiber *f)
 			return;
 		case SLEEP:
 		case DEAD:
+		case STARTING:
 			ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
 				list_del(&f->list);
 			}
