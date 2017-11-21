@@ -32,7 +32,7 @@ static LIST_HEAD(sch);
 static LIST_HEAD(dead);
 
 static void _fiber_run(void);
-static struct fiber * _fiber_fetch(uint8_t no, struct list_head *head);
+static struct fiber * _fiber_fetch_next_ready(void);
 void _fiber_switch(struct fiber *next, struct list_head *list);
 static void _fiber_schedule(enum fiber_state new_state, struct list_head *list);
 
@@ -65,7 +65,7 @@ fiber_cede(void)
 		return;
 
 	struct fiber *next;
-	if (!(next = _fiber_fetch(1, &ready)))
+	if (!(next = _fiber_fetch_next_ready()))
 		return;
 
 	return _fiber_switch(next, &ready);
@@ -74,6 +74,11 @@ fiber_cede(void)
 void
 fiber_schedule(void)
 {
+	if (current->state == WAKEUP) {
+		current->state = READY;
+		return;
+	}
+
 	return _fiber_schedule(SCHEDULED, &sch);
 }
 
@@ -174,7 +179,7 @@ _fiber_switch(struct fiber *next, struct list_head *list)
 	struct fiber *prev;
 	prev = current;
 
-	uint8_t real_sreg;
+	static uint8_t real_sreg;
 
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
 		list_del_init(&prev->list);
@@ -209,11 +214,6 @@ _fiber_schedule(enum fiber_state new_state, struct list_head *list)
 	if (!current)
 		return;
 
-	if (current->state == WAKEUP) {
-		current->state = READY;
-		return;
-	}
-
 	current->state = new_state;
 	struct fiber *next;
 
@@ -221,26 +221,26 @@ _fiber_schedule(enum fiber_state new_state, struct list_head *list)
 	// wait until next fiber is present
 	// or current is ready
 	for (;;) {
-		next = _fiber_fetch(1, &ready);
-		if (current->state == READY) {
-			return;
+		next = _fiber_fetch_next_ready();
+
+		if (current->state == READY && new_state == SCHEDULED) {
+				return;
 		}
 		if (next) {
 			return _fiber_switch(next, list);
 		}
+
 	}
 }
 
 static struct fiber *
-_fiber_fetch(uint8_t no, struct list_head *head)
+_fiber_fetch_next_ready(void)
 {
 	struct list_head *pos;
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-		list_for_each(pos, head) {
-			if (no > 0) {
-				no--;
+		list_for_each(pos, &ready) {
+			if (pos == &current->list)
 				continue;
-			}
 			return list_entry(pos, struct fiber, list);
 		}
 	}

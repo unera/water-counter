@@ -1,7 +1,7 @@
 #ifndef FIBER_H
 #define FIBER_H
 #include <stddef.h>
-#include <stdarg.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -85,7 +85,7 @@ void fiber_wakeup(struct fiber *w);
 
 #define FIBER_CREATE(__cb, __stack_size, __data)			\
 	do {								\
-		static uint8_t stack[__stack_size];			\
+		static unsigned char stack[__stack_size];		\
 		fiber_create(__cb, stack, __stack_size, __data);	\
 	} while(0);
 

@@ -30,6 +30,7 @@ fiber_delay(uint8_t clocks)
 				}
 			}
 		}
+		led_switch(LED_BUILTIN);
 		fiber_schedule();
 	}
 }
@@ -51,11 +52,6 @@ void
 setup() {
 	pinMode(LED_BUILTIN, OUTPUT);
 
-	pinMode(7, OUTPUT);
-	pinMode(8, OUTPUT);
-	pinMode(9, OUTPUT);
-
-
 	OCR2A = F_CPU / 1024 /  F_CLOCK;
 	TCCR2A = (1 << WGM21) | (0 << WGM20);			// CTC to OCR2A
 	TCCR2B = (1 << CS22) | (1 << CS21) | (1 << CS20);	// 1024
@@ -63,19 +59,14 @@ setup() {
 	sei();
 
 	fibers_init();
-	// FIBER_CREATE(fiber_cede, 64);
-	FIBER(led_X, (void *)((7 << 8) | 21));
-	FIBER(led_X, (void *)((8 << 8) | 22));
-	FIBER(led_X, (void *)((9 << 8) | 23));
+	FIBER(led_X, (void *)((9 << 8) | 31));
+	FIBER(led_X, (void *)((7 << 8) | 32));
+	FIBER(led_X, (void *)((8 << 8) | 33));
 }
 
 SIGNAL(TIMER2_COMPA_vect) {
 	TCNT2 = 0;
 	for (uint8_t i = 0; i < SLOTS; i++) {
-		if (!_delay[i])
-			continue;
-		if (fiber_status(_delay[i]) != 's')
-			continue;
 		fiber_wakeup(_delay[i]);
 		_delay[i] = NULL;
 	}
@@ -83,7 +74,7 @@ SIGNAL(TIMER2_COMPA_vect) {
 
 void
 loop() {
-	fiber_schedule();
-	//fiber_cancel(fiber_current());
-	// fiber_cede();
+	//fiber_schedule();
+	fiber_cancel(fiber_current());
+	//fiber_cede();
 }
