@@ -1,6 +1,9 @@
-#include "fiber.h"
 #include <avr/interrupt.h>
 #include <util/atomic.h>
+
+#define FIBER_STACK_SIZE	64
+#include "fiber.h"
+
 
 #define F_CLOCK		128
 
@@ -31,31 +34,15 @@ fiber_delay(uint8_t clocks)
 	}
 }
 
-
 static void
-led_r(void)
+led_X(void *data)
 {
+	uint8_t led = ((uint16_t)data) >> 8;
+	uint8_t period = ((uint16_t)data) & 0xFF;
+	pinMode(led, OUTPUT);
 	while (1){
-		fiber_delay(23);
-		led_switch(9);
-	}
-}
-
-static void
-led_g()
-{
-	while(1) {
-		fiber_delay(22);
-		led_switch(8);
-	}
-}
-
-static void
-led_b()
-{
-	while(1) {
-		fiber_delay(21);
-		led_switch(7);
+		fiber_delay(period);
+		led_switch(led);
 	}
 }
 
@@ -77,9 +64,9 @@ setup() {
 
 	fibers_init();
 	// FIBER_CREATE(fiber_cede, 64);
-	FIBER_CREATE(led_r, 64);
-	FIBER_CREATE(led_g, 64);
-	FIBER_CREATE(led_b, 64);
+	FIBER(led_X, (void *)((7 << 8) | 21));
+	FIBER(led_X, (void *)((8 << 8) | 22));
+	FIBER(led_X, (void *)((9 << 8) | 23));
 }
 
 SIGNAL(TIMER2_COMPA_vect) {

@@ -22,6 +22,7 @@ struct fiber {
 	fiber_cb		cb;		// fiber function
 	code_t			sp;		// stack pointer
 
+	void			*data;
 	enum fiber_state	state;
 };
 
@@ -37,12 +38,13 @@ static void _fiber_schedule(enum fiber_state new_state, struct list_head *list);
 
 
 struct fiber *
-fiber_create(fiber_cb cb, void *stack, size_t stack_size)
+fiber_create(fiber_cb cb, void *stack, size_t stack_size, void *data)
 {
 	struct fiber *c = (struct fiber *)stack;
 	c->state = STARTING;
 	c->cb = cb;
 	c->sp = (code_t)(((uint8_t *)stack) + stack_size - 1);
+	c->data = data;
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
 		list_add_tail(&c->list, &ready);
 	}
@@ -159,7 +161,7 @@ _fiber_run(void)
 {
 	for(;;) {
 		current->state = READY;
-		current->cb();
+		current->cb(current->data);
 		current->state = DEAD;
 		_fiber_schedule(DEAD, &dead);
 		// someone woke up zombie

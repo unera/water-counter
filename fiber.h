@@ -1,6 +1,7 @@
 #ifndef FIBER_H
 #define FIBER_H
 #include <stddef.h>
+#include <stdarg.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -16,7 +17,7 @@ struct fiber;
  * typedef fiber_cb
  * fiber startup function
  */
-typedef void (*fiber_cb)(void);
+typedef void (*fiber_cb)(void *);
 
 /**
  * fibers_init() - init fiber system
@@ -32,6 +33,7 @@ void fibers_init(void);
  * @cb - fiber startup function
  * @stack - stack for created fiber
  * @stack_size - stack size
+ * @data - data that will passed to fiber startup function
  *
  * Note: the function will allocate struct fiber (in the stack)
  * and use the stack while doing switch to the fiber.
@@ -39,7 +41,8 @@ void fibers_init(void);
  * New fiber creates with 'R' status. One of the following fiber_cede
  * or fiber_schedule calls will switch to the fiber.
  */
-struct fiber * fiber_create(fiber_cb cb, void *stack, size_t stack_size);
+struct fiber *
+fiber_create(fiber_cb cb, void *stack, size_t stack_size, void *data);
 
 /**
  * fiber_current - get current fiber handler
@@ -80,11 +83,18 @@ void fiber_schedule(void);
 void fiber_wakeup(struct fiber *w);
 
 
-#define FIBER_CREATE(__cb, __stack_size)			\
-	do {							\
-		static uint8_t stack[__stack_size];		\
-		fiber_create(__cb, stack, __stack_size);	\
+#define FIBER_CREATE(__cb, __stack_size, __data)			\
+	do {								\
+		static uint8_t stack[__stack_size];			\
+		fiber_create(__cb, stack, __stack_size, __data);	\
 	} while(0);
+
+#ifdef FIBER_STACK_SIZE
+#define FIBER(__cb, __data)						\
+	FIBER_CREATE(__cb, FIBER_STACK_SIZE, __data)
+
+#endif	/* defined FIBER_STACK_SIZE */
+
 
 #ifdef __cplusplus
 };	/* extern "C" */
