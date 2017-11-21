@@ -7,7 +7,6 @@
 static struct fiber *_delay[5] = {NULL, NULL, NULL, NULL, NULL};
 #define SLOTS 5
 
-static struct fiber *off, *on;
 
 inline void led_switch(uint8_t no) {
 	if (digitalRead(no))
@@ -34,38 +33,41 @@ fiber_delay(uint8_t clocks)
 
 
 static void
-led_on(void)
+led_r(void)
 {
 	while (1){
 		fiber_delay(23);
-		led_switch(8);
-		digitalWrite(LED_BUILTIN, HIGH);
+		led_switch(9);
 	}
 }
 
 static void
-led_off()
+led_g()
+{
+	while(1) {
+		fiber_delay(22);
+		led_switch(8);
+	}
+}
+
+static void
+led_b()
 {
 	while(1) {
 		fiber_delay(21);
 		led_switch(7);
-		digitalWrite(LED_BUILTIN, LOW);
 	}
 }
+
 
 void
 setup() {
 	pinMode(LED_BUILTIN, OUTPUT);
-	digitalWrite(LED_BUILTIN, LOW);
 
 	pinMode(7, OUTPUT);
 	pinMode(8, OUTPUT);
 	pinMode(9, OUTPUT);
 
-	fibers_init();
-
-	static uint8_t stack1[128];
-	static uint8_t stack2[128];
 
 	OCR2A = F_CPU / 1024 /  F_CLOCK;
 	TCCR2A = (1 << WGM21) | (0 << WGM20);			// CTC to OCR2A
@@ -73,8 +75,11 @@ setup() {
 	TIMSK2 = (1 << OCIE2A);
 	sei();
 
-	off = fiber_create(led_off, stack2, sizeof(stack2));
-	on = fiber_create(led_on, stack1, sizeof(stack1));
+	fibers_init();
+	// FIBER_CREATE(fiber_cede, 64);
+	FIBER_CREATE(led_r, 64);
+	FIBER_CREATE(led_g, 64);
+	FIBER_CREATE(led_b, 64);
 }
 
 SIGNAL(TIMER2_COMPA_vect) {
@@ -91,5 +96,7 @@ SIGNAL(TIMER2_COMPA_vect) {
 
 void
 loop() {
-	fiber_cede();
+	fiber_schedule();
+	//fiber_cancel(fiber_current());
+	// fiber_cede();
 }

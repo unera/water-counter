@@ -8,19 +8,21 @@
 enum fiber_state {
 	READY		= 'r',
 	STARTING	= 'R',
+	WAKEUP		= 'W',
+
 	SCHEDULED	= 's',
 	DEAD		= 'd',
 	CANCELLED	= 'c'
 };
+
 typedef uint16_t		code_t;
 struct fiber {
 	struct list_head	list;		// member
-	enum fiber_state	state;
+
 	fiber_cb		cb;		// fiber function
 	code_t			sp;		// stack pointer
 
-	struct list_head	join;
-	uint8_t data[0];			// TODO: use the area in join
+	enum fiber_state	state;
 };
 
 static struct fiber *current;
@@ -41,7 +43,6 @@ fiber_create(fiber_cb cb, void *stack, size_t stack_size)
 	c->state = STARTING;
 	c->cb = cb;
 	c->sp = (code_t)(((uint8_t *)stack) + stack_size - 1);
-	INIT_LIST_HEAD(&c->join);
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
 		list_add_tail(&c->list, &ready);
 	}
@@ -79,13 +80,10 @@ fiber_wakeup(struct fiber *f)
 {
 	if (!f)
 		return;
-	if (f->state != SCHEDULED)
-		return;
-
-	if (f == current) {
-		// current fiber is wait in deadlock
-		ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-			current->state = READY;
+	if (f->state != SCHEDULED) {
+		if (f == current && f->state == READY) {
+			f->state = WAKEUP;
+			return;
 		}
 		return;
 	}
@@ -106,7 +104,6 @@ fibers_init(void)
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
 		memset(&_main, 0, sizeof(_main));
 		_main.state = READY;
-		INIT_LIST_HEAD(&_main.join);
 		list_add_tail(&_main.list, &ready);
 		current = &_main;
 	}
@@ -122,6 +119,7 @@ fiber_cancel(struct fiber *f)
 		case CANCELLED:
 			return;
 		case READY:
+		case WAKEUP:
 			break;
 		case SCHEDULED:
 		case STARTING:
@@ -132,8 +130,8 @@ fiber_cancel(struct fiber *f)
 	}
 
 	DROP:
-		f->state = CANCELLED;
 		ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+			f->state = CANCELLED;
 			list_del_init(&f->list);
 			list_add_tail(&f->list, &dead);
 		}
@@ -144,54 +142,13 @@ fiber_status(const struct fiber *f)
 {
 	if (!f)
 		return 'U';
-	return f->state;
-}
-
-const void *
-fiber_join(struct fiber *f)
-{
-	if (f == current)
-		return NULL;
 	switch(f->state) {
-		case STARTING:
 		case READY:
-		case SCHEDULED:
-			break;
+		case STARTING:
+		case WAKEUP:
+			return READY;
 		default:
-			return NULL;
-	}
-
-	_fiber_schedule(SCHEDULED, &f->join);
-	return f->data;
-}
-
-void
-fiber_done(const void *data, size_t data_len)
-{
-	/* not main fiber */
-	if (!current->cb) {
-		memmove(current->data, data, data_len);
-	}
-
-	current->state = DEAD;
-
-	// join waiters
-	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-		struct list_head *pos;
-		list_for_each(pos, &current->join) {
-			struct fiber *f =
-				list_entry(pos, struct fiber, list);
-			fiber_wakeup(f);
-		}
-	}
-	_fiber_schedule(DEAD, &dead);
-}
-
-void
-fiber_unlink(struct fiber *f)
-{
-	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-		list_del_init(&f->list);
+			return f->state;
 	}
 }
 
@@ -200,22 +157,12 @@ fiber_unlink(struct fiber *f)
 static void
 _fiber_run(void)
 {
-	current->state = READY;
 	for(;;) {
+		current->state = READY;
 		current->cb();
-
 		current->state = DEAD;
-
-		// join waiters
-		ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-			struct list_head *pos;
-			list_for_each(pos, &current->join) {
-				struct fiber *f =
-					list_entry(pos, struct fiber, list);
-				fiber_wakeup(f);
-			}
-		}
 		_fiber_schedule(DEAD, &dead);
+		// someone woke up zombie
 	}
 }
 
@@ -259,6 +206,12 @@ _fiber_schedule(enum fiber_state new_state, struct list_head *list)
 {
 	if (!current)
 		return;
+
+	if (current->state == WAKEUP) {
+		current->state = READY;
+		return;
+	}
+
 	current->state = new_state;
 	struct fiber *next;
 
@@ -267,10 +220,12 @@ _fiber_schedule(enum fiber_state new_state, struct list_head *list)
 	// or current is ready
 	for (;;) {
 		next = _fiber_fetch(1, &ready);
-		if (next)
-			return _fiber_switch(next, list);
-		if (current->state == READY)
+		if (current->state == READY) {
 			return;
+		}
+		if (next) {
+			return _fiber_switch(next, list);
+		}
 	}
 }
 
@@ -280,8 +235,10 @@ _fiber_fetch(uint8_t no, struct list_head *head)
 	struct list_head *pos;
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
 		list_for_each(pos, head) {
-			if (no--)
+			if (no > 0) {
+				no--;
 				continue;
+			}
 			return list_entry(pos, struct fiber, list);
 		}
 	}
